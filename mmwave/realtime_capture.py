@@ -1,7 +1,5 @@
-import codecs
 import socket
 import struct
-from enum import Enum
 import threading
 import time
 import array as arr
