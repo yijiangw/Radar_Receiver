@@ -1,4 +1,4 @@
-from realtime_capture import adcCapThread
+from mmwave.realtime_capture import adcCapThread
 import numpy as np
 import threading
 import time
