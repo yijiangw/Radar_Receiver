@@ -90,7 +90,16 @@ class adcCapThread (threading.Thread):
             self._packet_receiver(self)
         elif self.receiver == "frame":
             self._frame_receiver(self)
-      
+        elif self.receiver == "direct_save":
+            self.
+
+    def _packet_direct_store_receiver(self):
+        f = open("adc_direct_save.bin", "wb")
+        while self.whileSign:
+            data, addr = self.data_socket.recvfrom(MAX_PACKET_SIZE)
+            f.write(data)
+        f.close()
+    
     def _packet_receiver(self):
         # first capture -- find the beginning of a Frame
         zero_packet = np.zeros(BYTES_IN_PACKET//2,dtype = np.int16)
