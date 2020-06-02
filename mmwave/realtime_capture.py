@@ -37,7 +37,7 @@ class adcCapThread (threading.Thread):
         self.nextCapBufferPosition = 0
         self.bufferOverWritten = True
         self.bufferSize = bufferSize
-        
+        self.receiver = "direct_save"
         # find the 2bytes length item_type 
         shortarr = arr.array("h",[1])        
         intarr = arr.array("i",[1])
