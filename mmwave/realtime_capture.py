@@ -74,20 +74,20 @@ class adcCapThread (threading.Thread):
             self.bufferArray = np.zeros((self.bufferSize,BYTES_IN_FRAME//2), dtype = np.int16)
             self.itemNumArray = np.zeros(self.bufferSize, dtype = np.int32)
             self.lostPackeFlagtArray = np.zeros(self.bufferSize,  dtype = bool)
-            self.receiver == "frame"
+            self.receiver = "frame"
 
         elif receiverType == "packet": 
             self.bufferSize *= 500
             self.bufferArray = np.zeros((self.bufferSize,BYTES_IN_PACKET//2), dtype = np.int16)
             self.itemNumArray = np.zeros(self.bufferSize, dtype = np.int32)
             self.lostPackeFlagtArray = np.zeros(self.bufferSize,  dtype = bool)
-            self.receiver == "packet"
+            self.receiver = "packet"
 
 
     def run(self):
 
         if self.receiver == "packet":
-            self._packet_receiver(self)
+            self._packet_receiver()
         elif self.receiver == "frame":
             self._frame_receiver(self)
         elif self.receiver == "direct_save":
