@@ -95,9 +95,13 @@ class adcCapThread (threading.Thread):
 
     def _packet_direct_store_receiver(self):
         f = open("adc_direct_save.bin", "wb")
+        s = []
         while self.whileSign:
-            data, addr = self.data_socket.recvfrom(MAX_PACKET_SIZE)
-            f.write(data)
+            data, addr = self.data_socket.recvfrom(MAX_PACKET_SIZE) 
+            s.append(data)        
+            # f.write(data)
+        for d in s:
+            f.write(d)
         f.close()
     
     def _packet_receiver(self):
