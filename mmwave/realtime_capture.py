@@ -91,7 +91,7 @@ class adcCapThread (threading.Thread):
         elif self.receiver == "frame":
             self._frame_receiver(self)
         elif self.receiver == "direct_save":
-            self.
+            self._packet_direct_store_receiver(self)
 
     def _packet_direct_store_receiver(self):
         f = open("adc_direct_save.bin", "wb")
