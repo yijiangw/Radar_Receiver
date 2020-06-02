@@ -90,26 +90,21 @@ class adcCapThread (threading.Thread):
             self._packet_receiver(self)
         elif self.receiver == "frame":
             self._frame_receiver(self)
-
-        
-
+      
     def _packet_receiver(self):
         # first capture -- find the beginning of a Frame
         zero_packet = np.zeros(BYTES_IN_PACKET//2,dtype = np.int16)
         self.data_socket.settimeout(1)
         packet_num, byte_count, packet_data = self._read_data_packet()
-        last_packet_num = packet_num
-        
+        self.resentCapNum = packet_num
         while self.whileSign:
             packet_num, byte_count, packet_data = self._read_data_packet()
-            self.resentCapNum = last_packet_num
             # fix up the lost packets
             if self.resentCapNum < packet_num-1:
                 while self.resentCapNum < packet_num:
                     self.resentCapNum+=1                    
                     self.lostPackeFlagtArray[self.nextCapBufferPosition] = True
-                    self._store_frame(zero_packet)                
-            last_packet_num = packet_num
+                    self._store_frame(zero_packet)
             self.resentCapNum = packet_num
             self.lostPackeFlagtArray[self.nextCapBufferPosition] = False
             self._store_frame(packet_data)
@@ -198,11 +193,7 @@ class adcCapThread (threading.Thread):
             # this packet finish
             last_packet_num = packet_num
     
-
-
     def getFrame(self):
-        # print("latestReadNum",self.latestReadNum)
-        # print("data",self.nextReadBufferPosition)
         if self.latestReadNum != 0:
             if self.bufferOverWritten == True:
                 return "bufferOverWritten",-1,False
@@ -219,8 +210,6 @@ class adcCapThread (threading.Thread):
         return readframe,self.latestReadNum,lostPacketFlag
     
     def getPacket(self):
-        # print("latestReadNum",self.latestReadNum)
-        # print("data",self.nextReadBufferPosition)
         if self.latestReadNum != 0:
             if self.bufferOverWritten == True:
                 return "bufferOverWritten",-1,False
@@ -228,7 +217,7 @@ class adcCapThread (threading.Thread):
             self.bufferOverWritten = False
         nextReadPosition = (self.nextReadBufferPosition+1)%self.bufferSize 
         if nextReadPosition == self.nextCapBufferPosition:
-            return "wait new frame",-2,False
+            return "wait new packet",-2,False
         else:
             readframe = self.bufferArray[self.nextReadBufferPosition]
             self.latestReadNum = self.itemNumArray[self.nextReadBufferPosition]            

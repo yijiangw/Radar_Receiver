@@ -21,16 +21,16 @@ while True:
         # print(lostPacketListFlag)
         counter+=1
         f.write(readItem.tobytes())
-        if counter == 150:
+        if counter == 1500:
             # np.save(str(n),nlist)
             counter = 0
             n+=1        
         
-    elif ItemNum==-1:
-        print(readItem)
-    elif ItemNum==-2:       
-        # print(readItem)
-        time.sleep(0.04)
+    # elif ItemNum==-1:
+    #     print(readItem)
+    # elif ItemNum==-2:       
+    #     # print(readItem)
+    #     time.sleep(0.04)
     if n>10:    
        a.whileSign = False 
        print(lostPacketList)
