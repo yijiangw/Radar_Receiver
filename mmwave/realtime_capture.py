@@ -213,7 +213,7 @@ class adcCapThread (threading.Thread):
         else: 
             self.bufferOverWritten = False
         nextReadPosition = (self.nextReadBufferPosition+1)%self.bufferSize 
-        if nextReadPosition == self.nextCapBufferPosition:
+        if self.nextReadBufferPosition == self.nextCapBufferPosition:
             return "wait new frame",-2,False
         else:
             readframe = self.bufferArray[self.nextReadBufferPosition]
@@ -242,7 +242,7 @@ class adcCapThread (threading.Thread):
         self.bufferArray[self.nextCapBufferPosition] = recentframe                    
         self.itemNumArray[self.nextCapBufferPosition] = self.resentCapNum
         # if the new frame over write the buffer at the location where the old frame even has not been read 
-        if(self.nextReadBufferPosition == self.nextCapBufferPosition):
+        if((self.nextReadBufferPosition-1+self.bufferSize)%self.bufferSize == self.nextCapBufferPosition):
             # print("ttttt")
             self.bufferOverWritten = True
         self.nextCapBufferPosition += 1

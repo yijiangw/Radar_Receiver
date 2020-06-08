@@ -5,7 +5,6 @@ import time
 
 a = adcCapThread(1,"adc",receiverType="frame")
 a.start()
-time.sleep(1)
 counter = 0
 nlist = []
 lostPacketList =[]
