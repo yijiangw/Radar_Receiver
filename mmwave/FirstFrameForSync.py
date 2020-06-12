@@ -1,7 +1,7 @@
 '''
 @Author: Yijiang Wang
 @Date: 2020-06-11 19:17:49
-@LastEditTime: 2020-06-11 23:04:08
+@LastEditTime: 2020-06-11 23:35:30
 @LastEditors: Yijiang Wang
 @FilePath: /mmwave/FirstFrameForSync.py
 @Description: Use to find out the mmwave raw adc record sync pattern performed by experimenter
@@ -72,7 +72,7 @@ def frameReshape(frame,frameConfig):
     # tx rx chirp simple
     return frameWithChirp.transpose(1,2,0,3)
 
-def findSyncFrame(path ,syncType = "vanish",rangeInBin = (5,8)):
+def findSyncFrame(path ,syncType = "arise",rangeInBin = (5,8)):
     # sync action happens on where
     syncEdge = 0
     adc = RawDataReader(path)
