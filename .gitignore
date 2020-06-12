@@ -127,3 +127,5 @@ dmypy.json
 .vs/Radar_Receiver/v16/.suo
 .vs/slnx.sqlite
 .vs/VSWorkspaceState.json
+*.sync
+mmwave/.vscode/settings.json

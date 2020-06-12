@@ -63,7 +63,7 @@ class adcCapThread (threading.Thread):
 
         # Bind data socket to fpga
         self.data_socket.bind(self.data_recv)
-
+        self.data_socket.setsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF,2**25)
         # Bind config socket to fpga
         self.config_socket.bind(self.cfg_recv)
         if receiverType == "frame":
@@ -152,6 +152,7 @@ class adcCapThread (threading.Thread):
             # fix up the lost packets
             if last_packet_num < packet_num-1:                
                 lost_packets = True
+                print("Lost")
                 recentframe_collect_count += BYTES_IN_PACKET*(packet_num-last_packet_num-1)
                 # record lost packet
                 self.lostPackeFlagtArray[self.nextCapBufferPosition] = True
