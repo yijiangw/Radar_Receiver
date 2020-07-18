@@ -13,6 +13,9 @@ from mpl_toolkits.mplot3d import Axes3D
 
 from mmwave.util import pm 
 from scipy.ndimage import convolve1d
+
+import mmwave.configuration as cfg
+
 # folder=sys.argv[1]
 
 # read 8 byte bin data and turn it to 4 short
@@ -29,13 +32,12 @@ class FrameConfig:
         self.numLoopsPerFrame=50
         # num of frame, frame rate 25hz
         self.numFrames=2500
-
-#       test
-        self.numFrames = 1500
-        self.numADCSamples = 300
-        self.numTxAntennas = 3
-        self.numRxAntennas = 4
-        self.numLoopsPerFrame = 50
+        
+        #  config with configuration.py
+        self.numADCSamples = cfg.ADC_SAMPLES
+        self.numTxAntennas = cfg.NUM_TX
+        self.numRxAntennas = cfg.NUM_RX
+        self.numLoopsPerFrame = cfg.CHIRP_LOOPS
 
         self.numChirpsPerFrame = self.numTxAntennas * self.numLoopsPerFrame
 
@@ -49,6 +51,59 @@ class FrameConfig:
         self.chirpLoopSize = self.chirpSize * self.numTxAntennas
         # calculate size of one frame in short.
         self.frameSize = self.chirpLoopSize * self.numLoopsPerFrame
+
+class PointCloudProcessCFG:    
+    def __init__(self):
+        self.frameConfig = FrameConfig()
+        self.enableCouplingSignatureRemoval = True
+        self.enableStaticClutterRemoval = True
+        self.enableDopplerCompensation = True
+        self.outputVelocity = True
+        self.outputSNR = True
+        self.outputRange = True
+        self.outputInMeter = True
+        # 0,1,2 for x,y,z additional data begin from 3
+        dim = 3
+        if self.outputVelocity:
+            self.velocityDim = dim
+            dim+=1
+        if self.outputSNR:
+            self.SNRDim = dim
+            dim+=1
+        if self.outputRange:
+            self.rangeDim = dim
+            dim+=1
+        self.couplingSignatureArray = np.array([])
+        self.couplingSignatureBinFrontIdx = 5
+        self.couplingSignatureBinRearIdx  = 4
+        self.couplingSignatureFrameCount  = 20
+        self.processedSignatureFrameCount = 0
+        self.sumCouplingSignatureArray = np.zeros((self.frameConfig.numTxAntennas,self.frameConfig.numRxAntennas,self.couplingSignatureBinFrontIdx+self.couplingSignatureBinRearIdx),dtype = np.complex)
+
+    def calculateCouplingSignatureArray(self,rawBinPath):
+        reader = RawDataReader(rawBinPath)
+        couplingSignatureArray = np.zeros((self.frameConfig.numTxAntennas,self.frameConfig.numRxAntennas,self.couplingSignatureBinFrontIdx+self.couplingSignatureBinRearIdx),dtype = np.complex)
+        for i in range(self.couplingSignatureFrameCount):
+            frame = reader.getNextFrame(self.frameConfig)
+            reshapedFrame = frameReshape(frame,self.frameConfig)
+            couplingSignatureArray+=np.sum(np.concatenate((reshapedFrame[...,:self.couplingSignatureBinFrontIdx],
+                                                           reshapedFrame[...,-1*self.couplingSignatureBinRearIdx:]),
+                                                           axis=3),
+                                           axis=2)/reshapedFrame.shape[2]
+        reader.close()
+        shape=couplingSignatureArray.shape[0:2]+(1,couplingSignatureArray.shape[2])
+        self.couplingSignatureArray = np.reshape(couplingSignatureArray/self.couplingSignatureFrameCount,shape)
+    
+    def realtimeCalculateCouplingSignatureArray(self,reshapedFrame):
+        if self.self.processedSignatureFrameCount < self.couplingSignatureFrameCount:
+            self.sumCouplingSignatureArray+=np.sum(np.concatenate((reshapedFrame[...,:self.couplingSignatureBinFrontIdx],
+                                                                   reshapedFrame[...,-1*self.couplingSignatureBinRearIdx:]),
+                                                                   axis=3),
+                                                   axis=2)/reshapedFrame.shape[2]
+            self.self.processedSignatureFrameCount += 1
+            if self.couplingSignatureFrameCount == self.couplingSignatureFrameCount:                
+                shape=shape=couplingSignatureArray.shape[0:2]+(1,couplingSignatureArray.shape[2])
+                self.couplingSignatureArray=np.reshape(self.sumCouplingSignatureArray/self.couplingSignatureFrameCount,shape)
 
 class RawDataReader:
     def __init__(self,path="C:\\workspace\\adc_dataLR.bin"):
@@ -67,24 +122,60 @@ class RawDataReader:
         # print(numpyCompFrame[:8])
         return NextFrame 
 
+    def close(self):
+        self.ADCBinFile.close()
 
 def frameReshape(frame,frameConfig):
     frameWithChirp = np.reshape(frame,(frameConfig.numLoopsPerFrame,frameConfig.numTxAntennas,frameConfig.numRxAntennas,-1))
     # tx rx chirp simple
     return frameWithChirp.transpose(1,2,0,3)
 
-def rangeFFT(frame,frameConfig):    
+def rangeFFT(reshapedFrame,frameConfig):    
     """ 1D FFT for range
     """
-    windowedBins1D = frameReshape(frame,frameConfig)*np.hamming(frameConfig.numADCSamples)
+    windowedBins1D = reshapedFrame*np.hamming(frameConfig.numADCSamples)
     rangeFFTResult=np.fft.fft(windowedBins1D)
     return rangeFFTResult
 
-def dopplerFFT(frame,frameConfig):    
-    """ 2D FFT for speed
+def couplingSignatureRemoval(rangeFFTResult, pointCloudProcessCFG):
+    rangeFFTResult[:,:,:,:pointCloudProcessCFG.couplingSignatureBinFrontIdx+1] -= pointCloudProcessCFG.couplingSignatureArray[:,:,:,:pointCloudProcessCFG.couplingSignatureBinFrontIdx+1]
+    rangeFFTResult[:,:,:,int(-1*pointCloudProcessCFG.couplingSignatureBinRearIdx):] -= pointCloudProcessCFG.couplingSignatureArray[:,:,:,int(-1*pointCloudProcessCFG.couplingSignatureBinRearIdx):]
+
+    return rangeFFTResult
+
+def clutter_removal(input_val, axis=0):
+    """Perform basic static clutter removal by removing the mean from the input_val on the specified doppler axis.
+    Args:
+        input_val (ndarray): Array to perform static clutter removal on. Usually applied before performing doppler FFT.
+            e.g. [num_chirps, num_vx_antennas, num_samples], it is applied along the first axis.
+        axis (int): Axis to calculate mean of pre-doppler.
+    Returns:
+        ndarray: Array with static clutter removed.
     """
-    windowedBins2D = frameReshape(frame,frameConfig)*(np.reshape(np.hamming(frameConfig.numLoopsPerFrame),(-1,1))*np.hamming(frameConfig.numADCSamples))
+    # Reorder the axes
+    reordering = np.arange(len(input_val.shape))
+    reordering[0] = axis
+    reordering[axis] = 0
+    input_val = input_val.transpose(reordering)
+
+    # Apply static clutter removal
+    mean = input_val.mean(0)
+    output_val = input_val - mean
+
+    return output_val.transpose(reordering)
+    
+def rangeAndDopplerFFT(reshapedFrame,frameConfig):
+    """ perform Range and Doppler FFT together
+    """
+    windowedBins2D = reshapedFrame*np.reshape(np.hamming(frameConfig.numLoopsPerFrame),(-1,1))*np.hamming(frameConfig.numADCSamples)
     dopplerFFTResult=np.fft.fft2(windowedBins2D)
+    return dopplerFFTResult
+
+def dopplerFFT(rangeResult,frameConfig):    
+    """ input result from rangeFFT and do 2D FFT for velocity
+    """
+    windowedBins2D = rangeResult*np.reshape(np.hamming(frameConfig.numLoopsPerFrame),(1,1,-1,1))
+    dopplerFFTResult=np.fft.fft(windowedBins2D,axis=2)
     return dopplerFFTResult
 
 def ca(x, *argv, **kwargs):
@@ -234,9 +325,150 @@ def naive_xyz(virtual_ant, num_tx=3, num_rx=4, fft_size=64):
     y_vector = np.sqrt(y_vector)
     return x_vector, y_vector, z_vector
 
+def frame2pointcloud(frame,pointCloudProcessCFG):
 
+    reshapedFrame = frameReshape(frame,frameConfig)
 
+    rangeResult = rangeFFT(reshapedFrame,frameConfig)
+    
+    if pointCloudProcessCFG.enableCouplingSignatureRemoval and pointCloudProcessCFG.couplingSignatureArray.any():
+        rangeResult = couplingSignatureRemoval(rangeResult,pointCloudProcessCFG)
 
+    if pointCloudProcessCFG.enableStaticClutterRemoval:
+        rangeResult = clutter_removal(rangeResult,axis=2)
+    
+    dopplerResult = dopplerFFT(rangeResult,frameConfig)
+    # sum all antenna to get a range*doppler array for cfar use
+    dopplerResultSumAllAntenna = np.sum(dopplerResult, axis=(0,1))
+    # transform the complex value array to DB value array  
+    dopplerResultInDB = 20*np.log10(np.absolute(dopplerResultSumAllAntenna))
+    # another method to get log2 value
+    # dopplerResultInDB = 10*np.log2(np.absolute(dopplerResult))
+
+    cfarRangeResult = np.apply_along_axis(func1d=ca_,
+                                            axis=1,
+                                            arr=dopplerResultInDB,
+                                            l_bound=25,
+                                            guard_len=4,
+                                            noise_len=8)
+    # print(cfarRangeResult.shape)
+    thresholdRange, noiseFloorRange = cfarRangeResult[...,0,:],cfarRangeResult[...,1,:]
+    rangeCFAR = np.zeros(thresholdRange.shape, bool)
+    rangeCFAR[dopplerResultInDB>thresholdRange] = True
+    # input()
+    cfarDopplerResult = np.apply_along_axis(func1d=ca_,
+                                            axis=0,
+                                            arr=dopplerResultInDB,
+                                            l_bound=25,
+                                            guard_len=4,
+                                            noise_len=8)
+    # print(cfarDopplerResult.shape)
+    thresholdDoppler, noiseFloorDoppler = cfarDopplerResult[...,0,:,:],cfarDopplerResult[...,1,:,:]
+    
+    dopplerCFAR = np.zeros(thresholdDoppler.shape, bool)
+    dopplerCFAR[dopplerResultInDB>thresholdDoppler] = True
+
+    cfarResult = rangeCFAR|dopplerCFAR
+
+    AOAInput = dopplerResult[:,:,cfarResult==True]
+    AOAInput = AOAInput.reshape(12,-1)
+    print("AOAInput:",AOAInput.shape,len(AOAInput))
+    if AOAInput.shape[1]==0:
+        return np.array([]).reshape(6,0)
+    x_vec, y_vec, z_vec = naive_xyz(AOAInput)
+    det_peaks_indices = np.argwhere(cfarResult == True)
+    SNR = dopplerResultInDB - noiseFloorRange
+    SNR = SNR[cfarResult==True]
+    print("SNR shape",SNR.shape)
+    R = det_peaks_indices[:,1]
+    V = det_peaks_indices[:,0]
+    print(R.shape)
+    # print(S.shape)
+    # print(R)
+    # print(S)
+    x,y,z = x_vec*R, y_vec*R, z_vec*R
+    loc=np.concatenate((x,y,z,V,SNR,R))
+    print("loc1",loc.shape)
+    loc = np.reshape(loc,(6,-1))
+    print(loc.shape)
+    loc=np.transpose(loc)
+    loc=loc[y_vec!=0]
+    print(len(loc))
+    loc=np.transpose(loc)
+      
+    print(loc.shape)
+    pointCloud = loc
+    
+    return pointCloud
+
+if __name__ == '__main__':
+    pointCloudProcessCFG = PointCloudProcessCFG()
+    frameConfig = pointCloudProcessCFG.frameConfig
+    dataPath = "adc_data_Raw_0.bin"
+    reader = RawDataReader(dataPath)
+    pointCloudProcessCFG.calculateCouplingSignatureArray(dataPath)
+    print3Dfig = True
+    if print3Dfig == True:
+        fig = plt.figure()
+        plt.ion()
+        elev = 0
+        azim = 0
+    while True:
+        frame = reader.getNextFrame(frameConfig)
+        pointCloud = frame2pointcloud(frame,pointCloudProcessCFG)
+        
+        
+        
+        if print3Dfig == True:
+            # 清空图像
+            fig.clf()
+            # 设定标题
+            fig.suptitle("3d")
+
+            # 生成画布
+            # add_subplot(子图 总行数，总列数，此图位置)
+            pointCloudSubplot = fig.add_subplot(111, projection="3d")
+            pointCloudSubplot.view_init(elev, azim)
+
+            # 画三维散点图
+            color = pointCloud[pointCloudProcessCFG.velocityDim]
+            pointCloud[pointCloudProcessCFG.SNRDim]
+            pointCloud[pointCloudProcessCFG.rangeDim]
+
+            scale = 4
+
+            x = pointCloud[0]
+            y = pointCloud[1]
+            z = pointCloud[2]
+            
+            pointCloudSubplot.scatter(x, y, z, s=scale, c=color, marker=".")
+
+            # 设置坐标轴图标
+            pointCloudSubplot.set_xlabel("X Label")
+            pointCloudSubplot.set_ylabel("Y Label")
+            pointCloudSubplot.set_zlabel("Z Label")
+
+            # 设置坐标轴范围
+            pointCloudSubplot.set_xlim(-200, 200)
+            pointCloudSubplot.set_ylim(0, 150)
+            pointCloudSubplot.set_zlim(-200, 200)
+
+            """
+            otherplot = fig.add_subplot(121)
+
+            """
+            # 暂停
+            plt.pause(0.1)
+            azim=pointCloudSubplot.azim
+            elev=pointCloudSubplot.elev
+
+    # 关闭交互模式
+    plt.ioff()
+
+    # 图形显示
+    plt.show()
+
+"""
 if __name__ == '__main__':
     rader = RawDataReader("adc.bin")
     frameConfig = FrameConfig()
@@ -294,7 +526,9 @@ if __name__ == '__main__':
         loc=np.reshape(loc,(3,-1))
         loc=np.transpose(loc)
         loc=loc[y_vec!=0]
-        """
+        
+"""
+"""
         print(loc)
         print("AOA",AOAInput.shape)
         print("rangeCFAR",rangeCFAR)
@@ -308,9 +542,10 @@ if __name__ == '__main__':
         pm(dopplerResultseparate)
         pm(dopplerCFAR)
         pm(rangeCFAR)
-        pm(cfarResult)"""
+        pm(cfarResult)
+"""
 
-        """
+"""
         import numpy as np
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import Axes3D
@@ -326,9 +561,9 @@ if __name__ == '__main__':
         ax.set_ylabel('Y')
         ax.set_xlabel('X')
         plt.show()
-        """
+"""
 
-
+"""
         # 循环
 
         fig.clf()
@@ -367,6 +602,6 @@ if __name__ == '__main__':
 
     # 图形显示
     plt.show()
-        
+""" 
 
 
