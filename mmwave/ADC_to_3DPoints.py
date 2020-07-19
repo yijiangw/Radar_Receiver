@@ -176,6 +176,7 @@ def dopplerFFT(rangeResult,frameConfig):
     """
     windowedBins2D = rangeResult*np.reshape(np.hamming(frameConfig.numLoopsPerFrame),(1,1,-1,1))
     dopplerFFTResult=np.fft.fft(windowedBins2D,axis=2)
+    dopplerFFTResult=np.fft.fftshift(dopplerFFTResult,axes=2)
     return dopplerFFTResult
 
 def ca(x, *argv, **kwargs):
@@ -326,6 +327,7 @@ def naive_xyz(virtual_ant, num_tx=3, num_rx=4, fft_size=64):
     return x_vector, y_vector, z_vector
 
 def frame2pointcloud(frame,pointCloudProcessCFG):
+    frameConfig = pointCloudProcessCFG.frameConfig
 
     reshapedFrame = frameReshape(frame,frameConfig)
 
@@ -380,25 +382,23 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
     SNR = dopplerResultInDB - noiseFloorRange
     SNR = SNR[cfarResult==True]
     print("SNR shape",SNR.shape)
-    R = det_peaks_indices[:,1]
-    V = det_peaks_indices[:,0]
+
+    R = det_peaks_indices[:,1].astype(np.float64)
+    V = (det_peaks_indices[:,0]-frameConfig.numDopplerBins//2).astype(np.float64)
+    if pointCloudProcessCFG.outputInMeter:
+        R *= cfg.RANGE_RESOLUTION
+        V *= cfg.DOPPLER_RESOLUTION
     print(R.shape)
     # print(S.shape)
     # print(R)
     # print(S)
     x,y,z = x_vec*R, y_vec*R, z_vec*R
-    loc=np.concatenate((x,y,z,V,SNR,R))
-    print("loc1",loc.shape)
-    loc = np.reshape(loc,(6,-1))
-    print(loc.shape)
-    loc=np.transpose(loc)
-    loc=loc[y_vec!=0]
-    print(len(loc))
-    loc=np.transpose(loc)
-      
-    print(loc.shape)
-    pointCloud = loc
-    
+    pointCloud=np.concatenate((x,y,z,V,SNR,R))
+    print("pointCloud",pointCloud.shape)
+    pointCloud = np.reshape(pointCloud,(6,-1))
+    print(pointCloud.shape)
+    pointCloud = pointCloud[:,y_vec!=0]      
+    print(pointCloud.shape)      
     return pointCloud
 
 if __name__ == '__main__':
@@ -407,6 +407,7 @@ if __name__ == '__main__':
     dataPath = "adc_data_Raw_0.bin"
     reader = RawDataReader(dataPath)
     pointCloudProcessCFG.calculateCouplingSignatureArray(dataPath)
+    
     print3Dfig = True
     if print3Dfig == True:
         fig = plt.figure()
@@ -427,7 +428,7 @@ if __name__ == '__main__':
 
             # 生成画布
             # add_subplot(子图 总行数，总列数，此图位置)
-            pointCloudSubplot = fig.add_subplot(111, projection="3d")
+            pointCloudSubplot = fig.add_subplot(221, projection="3d")
             pointCloudSubplot.view_init(elev, azim)
 
             # 画三维散点图
@@ -449,14 +450,41 @@ if __name__ == '__main__':
             pointCloudSubplot.set_zlabel("Z Label")
 
             # 设置坐标轴范围
-            pointCloudSubplot.set_xlim(-200, 200)
-            pointCloudSubplot.set_ylim(0, 150)
-            pointCloudSubplot.set_zlim(-200, 200)
+            xlimmax = 200
+            ylimmax = 150
+            zlimmax = 200
+            if pointCloudProcessCFG.outputInMeter:
+                xlimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
+                ylimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
+                zlimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
+            
 
-            """
-            otherplot = fig.add_subplot(121)
+            pointCloudSubplot.set_xlim(-xlimmax, xlimmax)
+            pointCloudSubplot.set_ylim(0, ylimmax)
+            pointCloudSubplot.set_zlim(-zlimmax, zlimmax)
+            
+            
+            XZplot = fig.add_subplot(222)
+            XZplot.scatter(x, z, s=scale, c=color, marker=".")
+            XZplot.set_xlabel("X Label")
+            XZplot.set_ylabel("Z Label")
+            XZplot.set_xlim(-xlimmax, xlimmax)            
+            XZplot.set_ylim(-zlimmax, zlimmax)
 
-            """
+            YZplot = fig.add_subplot(223)
+            YZplot.scatter(y, z, s=scale, c=color, marker=".")
+            YZplot.set_xlabel("Y Label")
+            YZplot.set_ylabel("Z Label")
+            YZplot.set_xlim(0, ylimmax)            
+            YZplot.set_ylim(-zlimmax, zlimmax)
+
+            XYplot = fig.add_subplot(224)
+            XYplot.scatter(x, y, s=scale, c=color, marker=".")
+            XYplot.set_xlabel("X Label")
+            XYplot.set_ylabel("Y Label")
+            XYplot.set_xlim(-xlimmax, xlimmax)            
+            XYplot.set_ylim(0, ylimmax)  
+
             # 暂停
             plt.pause(0.1)
             azim=pointCloudSubplot.azim
