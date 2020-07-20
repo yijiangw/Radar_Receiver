@@ -398,37 +398,280 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
     pointCloud = np.reshape(pointCloud,(6,-1))
     print(pointCloud.shape)
     pointCloud = pointCloud[:,y_vec!=0]      
-    print(pointCloud.shape)      
+    print(pointCloud.shape) 
     return pointCloud
 
+def compareframe2pointcloud(frame,pointCloudProcessCFG):
+    frameConfig = pointCloudProcessCFG.frameConfig
+
+    reshapedFrame = frameReshape(frame,frameConfig)
+
+    rangeResult = rangeFFT(reshapedFrame,frameConfig)
+    
+    if pointCloudProcessCFG.enableCouplingSignatureRemoval and pointCloudProcessCFG.couplingSignatureArray.any():
+        rangeResult = couplingSignatureRemoval(rangeResult,pointCloudProcessCFG)
+
+    if pointCloudProcessCFG.enableStaticClutterRemoval:
+        rangeResult = clutter_removal(rangeResult,axis=2)
+    
+    dopplerResult = dopplerFFT(rangeResult,frameConfig)
+    # sum all antenna to get a range*doppler array for cfar use
+    dopplerResultSumAllAntenna = np.sum(dopplerResult, axis=(0,1))
+    # transform the complex value array to DB value array  
+    dopplerResultInDB = 20*np.log10(np.absolute(dopplerResultSumAllAntenna))
+    # another method to get log2 value
+    # dopplerResultInDB = 10*np.log2(np.absolute(dopplerResult))
+
+    cfarRangeResult = np.apply_along_axis(func1d=ca_,
+                                            axis=1,
+                                            arr=dopplerResultInDB,
+                                            l_bound=25,
+                                            guard_len=4,
+                                            noise_len=8)
+    # print(cfarRangeResult.shape)
+    thresholdRange, noiseFloorRange = cfarRangeResult[...,0,:],cfarRangeResult[...,1,:]
+    rangeCFAR = np.zeros(thresholdRange.shape, bool)
+    rangeCFAR[dopplerResultInDB>thresholdRange] = True
+    # input()
+    cfarDopplerResult = np.apply_along_axis(func1d=ca_,
+                                            axis=0,
+                                            arr=dopplerResultInDB,
+                                            l_bound=25,
+                                            guard_len=4,
+                                            noise_len=8)
+    # print(cfarDopplerResult.shape)
+    thresholdDoppler, noiseFloorDoppler = cfarDopplerResult[...,0,:,:],cfarDopplerResult[...,1,:,:]
+    
+    dopplerCFAR = np.zeros(thresholdDoppler.shape, bool)
+    dopplerCFAR[dopplerResultInDB>thresholdDoppler] = True
+
+    cfarResult1 = rangeCFAR|dopplerCFAR 
+
+    rangeResult = rangeFFT(reshapedFrame,frameConfig)
+   
+    
+    dopplerResult = dopplerFFT(rangeResult,frameConfig)
+    # sum all antenna to get a range*doppler array for cfar use
+    dopplerResultSumAllAntenna = np.sum(dopplerResult, axis=(0,1))
+    # transform the complex value array to DB value array  
+    dopplerResultInDB = 20*np.log10(np.absolute(dopplerResultSumAllAntenna))
+    # another method to get log2 value
+    # dopplerResultInDB = 10*np.log2(np.absolute(dopplerResult))
+
+    cfarRangeResult = np.apply_along_axis(func1d=ca_,
+                                            axis=1,
+                                            arr=dopplerResultInDB,
+                                            l_bound=25,
+                                            guard_len=4,
+                                            noise_len=8)
+    # print(cfarRangeResult.shape)
+    thresholdRange, noiseFloorRange = cfarRangeResult[...,0,:],cfarRangeResult[...,1,:]
+    rangeCFAR = np.zeros(thresholdRange.shape, bool)
+    rangeCFAR[dopplerResultInDB>thresholdRange] = True
+    # input()
+    cfarDopplerResult = np.apply_along_axis(func1d=ca_,
+                                            axis=0,
+                                            arr=dopplerResultInDB,
+                                            l_bound=25,
+                                            guard_len=4,
+                                            noise_len=8)
+    # print(cfarDopplerResult.shape)
+    thresholdDoppler, noiseFloorDoppler = cfarDopplerResult[...,0,:,:],cfarDopplerResult[...,1,:,:]
+    
+    dopplerCFAR = np.zeros(thresholdDoppler.shape, bool)
+    dopplerCFAR[dopplerResultInDB>thresholdDoppler] = True
+    cfarResult = ~cfarResult1
+    cfarResult2 = rangeCFAR|dopplerCFAR
+    cfarResult = cfarResult&cfarResult2
+
+    AOAInput = dopplerResult[:,:,cfarResult==True]
+    AOAInput = AOAInput.reshape(12,-1)
+    print("AOAInput:",AOAInput.shape,len(AOAInput))
+    if AOAInput.shape[1]==0:
+        return np.array([]).reshape(6,0)
+    x_vec, y_vec, z_vec = naive_xyz(AOAInput)
+    det_peaks_indices = np.argwhere(cfarResult == True)
+    SNR = dopplerResultInDB - noiseFloorRange
+    SNR = SNR[cfarResult==True]
+    print("SNR shape",SNR.shape)
+
+    R = det_peaks_indices[:,1].astype(np.float64)
+    V = (det_peaks_indices[:,0]-frameConfig.numDopplerBins//2).astype(np.float64)
+    if pointCloudProcessCFG.outputInMeter:
+        R *= cfg.RANGE_RESOLUTION
+        V *= cfg.DOPPLER_RESOLUTION
+    print(R.shape)
+    # print(S.shape)
+    # print(R)
+    # print(S)
+    x,y,z = x_vec*R, y_vec*R, z_vec*R
+    pointCloud=np.concatenate((x,y,z,V,SNR,R))
+    print("pointCloud",pointCloud.shape)
+    pointCloud = np.reshape(pointCloud,(6,-1))
+    print(pointCloud.shape)
+    pointCloud = pointCloud[:,y_vec!=0]      
+    print(pointCloud.shape) 
+
+    return cfarResult2,cfarResult1,pointCloud
+    
 if __name__ == '__main__':
+    compare = True
+
     pointCloudProcessCFG = PointCloudProcessCFG()
+    if compare == True:
+        originalpointCloudProcessCFG = PointCloudProcessCFG()
+        originalpointCloudProcessCFG.enableCouplingSignatureRemoval = False
+        originalpointCloudProcessCFG.enableStaticClutterRemoval = False
+        originalfig = plt.figure("orgin")
+        comparefig = plt.figure("diff")
+
     frameConfig = pointCloudProcessCFG.frameConfig
     dataPath = "adc_data_Raw_0.bin"
     reader = RawDataReader(dataPath)
     pointCloudProcessCFG.calculateCouplingSignatureArray(dataPath)
-    
+
     print3Dfig = True
+
     if print3Dfig == True:
-        fig = plt.figure()
+        fig = plt.figure("new")
         plt.ion()
         elev = 0
         azim = 0
     while True:
         frame = reader.getNextFrame(frameConfig)
         pointCloud = frame2pointcloud(frame,pointCloudProcessCFG)
-        
-        
+
+        if compare == True:
+            originalpointCloud = frame2pointcloud(frame,originalpointCloudProcessCFG)
+            originalcfarResult,newcfarResult,comparepointCloud = compareframe2pointcloud(frame,pointCloudProcessCFG)            
         
         if print3Dfig == True:
+            if compare == True:
+                comparefig.clf()
+                gs = comparefig.add_gridspec(3, 4)
+                pointCloudSubplot = comparefig.add_subplot(gs[0:3,0:3],projection="3d")
+                pointCloudSubplot.view_init(elev, azim)
+                color = comparepointCloud[pointCloudProcessCFG.velocityDim]
+                scale = 4
+                x = comparepointCloud[0]
+                y = comparepointCloud[1]
+                z = comparepointCloud[2]
+                pointCloudSubplot.scatter(x, y, z, s=scale, c=color, marker=".")
+
+                # 设置坐标轴图标
+                pointCloudSubplot.set_xlabel("X Label")
+                pointCloudSubplot.set_ylabel("Y Label")
+                pointCloudSubplot.set_zlabel("Z Label")
+
+                # 设置坐标轴范围
+                xlimmax = 200
+                ylimmax = 150
+                zlimmax = 200
+                if pointCloudProcessCFG.outputInMeter:
+                    xlimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
+                    ylimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
+                    zlimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
+                
+
+                pointCloudSubplot.set_xlim(-xlimmax, xlimmax)
+                pointCloudSubplot.set_ylim(0, ylimmax)
+                pointCloudSubplot.set_zlim(-zlimmax, zlimmax)
+
+                XZplot = comparefig.add_subplot(gs[0,-1])
+                XZplot.scatter(x, z, s=scale, c=color, marker=".")
+                XZplot.set_xlabel("X Label")
+                XZplot.set_ylabel("Z Label")
+                XZplot.set_xlim(-xlimmax, xlimmax)            
+                XZplot.set_ylim(-zlimmax, zlimmax)
+
+                YZplot = comparefig.add_subplot(gs[1,-1])
+                YZplot.scatter(y, z, s=scale, c=color, marker=".")
+                YZplot.set_xlabel("Y Label")
+                YZplot.set_ylabel("Z Label")
+                YZplot.set_xlim(0, ylimmax)            
+                YZplot.set_ylim(-zlimmax, zlimmax)
+
+                XYplot = comparefig.add_subplot(gs[2,-1])
+                XYplot.scatter(x, y, s=scale, c=color, marker=".")
+                XYplot.set_xlabel("X Label")
+                XYplot.set_ylabel("Y Label")
+                XYplot.set_xlim(-xlimmax, xlimmax)            
+                XYplot.set_ylim(0, ylimmax)  
+
+                
+                gs = originalfig.add_gridspec(4, 4)
+                originalfig.clf()
+                originalfig.suptitle("original")
+                pointCloudSubplot = originalfig.add_subplot(gs[0:3,0:3], projection="3d")
+                pointCloudSubplot.view_init(elev, azim)
+                color = originalpointCloud[pointCloudProcessCFG.velocityDim]
+
+                scale = 4
+
+                x = originalpointCloud[0]
+                y = originalpointCloud[1]
+                z = originalpointCloud[2]
+                
+                pointCloudSubplot.scatter(x, y, z, s=scale, c=color, marker=".")
+
+                # 设置坐标轴图标
+                pointCloudSubplot.set_xlabel("X Label")
+                pointCloudSubplot.set_ylabel("Y Label")
+                pointCloudSubplot.set_zlabel("Z Label")
+
+                # 设置坐标轴范围
+                xlimmax = 200
+                ylimmax = 150
+                zlimmax = 200
+                if pointCloudProcessCFG.outputInMeter:
+                    xlimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
+                    ylimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
+                    zlimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
+                
+
+                pointCloudSubplot.set_xlim(-xlimmax, xlimmax)
+                pointCloudSubplot.set_ylim(0, ylimmax)
+                pointCloudSubplot.set_zlim(-zlimmax, zlimmax)
+                
+                
+                XZplot = originalfig.add_subplot(gs[0,-1])
+                XZplot.scatter(x, z, s=scale, c=color, marker=".")
+                XZplot.set_xlabel("X Label")
+                XZplot.set_ylabel("Z Label")
+                XZplot.set_xlim(-xlimmax, xlimmax)            
+                XZplot.set_ylim(-zlimmax, zlimmax)
+
+                YZplot = originalfig.add_subplot(gs[1,-1])
+                YZplot.scatter(y, z, s=scale, c=color, marker=".")
+                YZplot.set_xlabel("Y Label")
+                YZplot.set_ylabel("Z Label")
+                YZplot.set_xlim(0, ylimmax)            
+                YZplot.set_ylim(-zlimmax, zlimmax)
+
+                XYplot = originalfig.add_subplot(gs[2,-1])
+                XYplot.scatter(x, y, s=scale, c=color, marker=".")
+                XYplot.set_xlabel("X Label")
+                XYplot.set_ylabel("Y Label")
+                XYplot.set_xlim(-xlimmax, xlimmax)            
+                XYplot.set_ylim(0, ylimmax)  
+
+                originalcfarplot = originalfig.add_subplot(gs[3,:2])
+                originalcfarplot.matshow(originalcfarResult)
+                cfarplot = originalfig.add_subplot(gs[3,2:])
+                cfarplot.matshow(newcfarResult)
+                # 暂停
+                azim=pointCloudSubplot.azim
+                elev=pointCloudSubplot.elev
+
             # 清空图像
             fig.clf()
             # 设定标题
-            fig.suptitle("3d")
+            fig.suptitle("static removed")
 
+            gs = originalfig.add_gridspec(3, 4)
             # 生成画布
             # add_subplot(子图 总行数，总列数，此图位置)
-            pointCloudSubplot = fig.add_subplot(221, projection="3d")
+            pointCloudSubplot = fig.add_subplot(gs[0:3,0:3], projection="3d")
             pointCloudSubplot.view_init(elev, azim)
 
             # 画三维散点图
@@ -464,21 +707,21 @@ if __name__ == '__main__':
             pointCloudSubplot.set_zlim(-zlimmax, zlimmax)
             
             
-            XZplot = fig.add_subplot(222)
+            XZplot = fig.add_subplot(gs[0,-1])
             XZplot.scatter(x, z, s=scale, c=color, marker=".")
             XZplot.set_xlabel("X Label")
             XZplot.set_ylabel("Z Label")
             XZplot.set_xlim(-xlimmax, xlimmax)            
             XZplot.set_ylim(-zlimmax, zlimmax)
 
-            YZplot = fig.add_subplot(223)
+            YZplot = fig.add_subplot(gs[1,-1])
             YZplot.scatter(y, z, s=scale, c=color, marker=".")
             YZplot.set_xlabel("Y Label")
             YZplot.set_ylabel("Z Label")
             YZplot.set_xlim(0, ylimmax)            
             YZplot.set_ylim(-zlimmax, zlimmax)
 
-            XYplot = fig.add_subplot(224)
+            XYplot = fig.add_subplot(gs[2,-1])
             XYplot.scatter(x, y, s=scale, c=color, marker=".")
             XYplot.set_xlabel("X Label")
             XYplot.set_ylabel("Y Label")
