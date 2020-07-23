@@ -129,4 +129,5 @@ dmypy.json
 .vs/VSWorkspaceState.json
 *.sync
 mmwave/.vscode/settings.json
+.vscode/settings.json
 *.c
