@@ -538,15 +538,16 @@ if __name__ == '__main__':
     compare = False
 
     pointCloudProcessCFG = PointCloudProcessCFG()
-    originalfig = plt.figure("orgin")
+    
     if compare == True:
         originalpointCloudProcessCFG = PointCloudProcessCFG()
         originalpointCloudProcessCFG.enableCouplingSignatureRemoval = False
         originalpointCloudProcessCFG.enableStaticClutterRemoval = False        
         comparefig = plt.figure("diff")
+        originalfig = plt.figure("orgin")
 
     frameConfig = pointCloudProcessCFG.frameConfig
-    dataPath = "adc_data_Raw_0.bin"
+    dataPath = "d:\\hongfei\\1.bin"
     reader = RawDataReader(dataPath)
     pointCloudProcessCFG.calculateCouplingSignatureArray(dataPath)
 
@@ -687,7 +688,7 @@ if __name__ == '__main__':
             # 设定标题
             fig.suptitle("static removed")
 
-            gs = originalfig.add_gridspec(3, 4)
+            gs = fig.add_gridspec(3, 4)
             # 生成画布
             # add_subplot(子图 总行数，总列数，此图位置)
             pointCloudSubplot = fig.add_subplot(gs[0:3,0:3], projection="3d")
