@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # coding=UTF-8
 
 import sys
@@ -78,6 +77,9 @@ class PointCloudProcessCFG:
         self.couplingSignatureBinRearIdx  = 4
         self.couplingSignatureFrameCount  = 20
         self.processedSignatureFrameCount = 0
+        self.dopplerCompensationTable = None
+        if self.enableDopplerCompensation:
+            self.dopplerCompensationTable = dopplerCompensationTable(self.frameConfig.numDopplerBins,self.frameConfig.numTxAntennas)
         self.sumCouplingSignatureArray = np.zeros((self.frameConfig.numTxAntennas,self.frameConfig.numRxAntennas,self.couplingSignatureBinFrontIdx+self.couplingSignatureBinRearIdx),dtype = np.complex)
 
     def calculateCouplingSignatureArray(self,rawBinPath):
@@ -178,6 +180,17 @@ def dopplerFFT(rangeResult,frameConfig):
     dopplerFFTResult=np.fft.fft(windowedBins2D,axis=2)
     dopplerFFTResult=np.fft.fftshift(dopplerFFTResult,axes=2)
     return dopplerFFTResult
+
+def dopplerCompensationTable(numdopplerBins,numTxAntennas):
+    # doppler 补偿 先预计算对应多普勒bin处应该增加的补偿值
+    table = np.exp(-1j*2 * np.pi * (np.arange(numdopplerBins) - numdopplerBins/2)/numdopplerBins/numTxAntennas).reshape(1,-1)
+    # 如果是三发天线 再附加计算2倍补偿值 
+    if(numTxAntennas == 3):
+        table = np.append(table,table*table,axis=0)
+        table = np.append(np.ones(numdopplerBins,dtype = "complex").reshape(1,-1),table,axis=0)
+        table = np.array([table for i in range(4)]).transpose((1,0,2)).reshape(12,-1)
+    return table
+
 
 def ca(x, *argv, **kwargs):
     """Detects peaks in signal using Cell-Averaging CFAR (CA-CFAR).
@@ -371,24 +384,31 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
     dopplerCFAR[dopplerResultInDB>thresholdDoppler] = True
 
     cfarResult = rangeCFAR|dopplerCFAR
-
-    AOAInput = dopplerResult[:,:,cfarResult==True]
-    AOAInput = AOAInput.reshape(12,-1)
-    print("AOAInput:",AOAInput.shape,len(AOAInput))
-    if AOAInput.shape[1]==0:
-        return np.array([]).reshape(6,0)
-    x_vec, y_vec, z_vec = naive_xyz(AOAInput)
+    
     det_peaks_indices = np.argwhere(cfarResult == True)
-    SNR = dopplerResultInDB - noiseFloorRange
-    SNR = SNR[cfarResult==True]
-    print("SNR shape",SNR.shape)
-
+    # record range and velocity of detected points
     R = det_peaks_indices[:,1].astype(np.float64)
     V = (det_peaks_indices[:,0]-frameConfig.numDopplerBins//2).astype(np.float64)
     if pointCloudProcessCFG.outputInMeter:
         R *= cfg.RANGE_RESOLUTION
         V *= cfg.DOPPLER_RESOLUTION
     print(R.shape)
+    # record rangeCFAR SNR of detected points  
+    SNR = dopplerResultInDB - noiseFloorRange
+    SNR = SNR[cfarResult==True]
+    print("SNR shape",SNR.shape)
+
+    AOAInput = dopplerResult[:,:,cfarResult==True]
+    AOAInput = AOAInput.reshape(12,-1)
+    if pointCloudProcessCFG.enableDopplerCompensation:
+        AOAInput *= pointCloudProcessCFG.dopplerCompensationTable[:,det_peaks_indices[:,0]]
+
+    print("AOAInput:",AOAInput.shape,len(AOAInput))
+    if AOAInput.shape[1]==0:
+        print("no cfar det point")
+        return np.array([]).reshape(6,0)
+    x_vec, y_vec, z_vec = naive_xyz(AOAInput)   
+    
     # print(S.shape)
     # print(R)
     # print(S)
@@ -515,14 +535,14 @@ def compareframe2pointcloud(frame,pointCloudProcessCFG):
     return cfarResult2,cfarResult1,pointCloud
     
 if __name__ == '__main__':
-    compare = True
+    compare = False
 
     pointCloudProcessCFG = PointCloudProcessCFG()
+    originalfig = plt.figure("orgin")
     if compare == True:
         originalpointCloudProcessCFG = PointCloudProcessCFG()
         originalpointCloudProcessCFG.enableCouplingSignatureRemoval = False
-        originalpointCloudProcessCFG.enableStaticClutterRemoval = False
-        originalfig = plt.figure("orgin")
+        originalpointCloudProcessCFG.enableStaticClutterRemoval = False        
         comparefig = plt.figure("diff")
 
     frameConfig = pointCloudProcessCFG.frameConfig
@@ -570,8 +590,7 @@ if __name__ == '__main__':
                 if pointCloudProcessCFG.outputInMeter:
                     xlimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
                     ylimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
-                    zlimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS
-                
+                    zlimmax = cfg.RANGE_RESOLUTION*cfg.NUM_RANGE_BINS                
 
                 pointCloudSubplot.set_xlim(-xlimmax, xlimmax)
                 pointCloudSubplot.set_ylim(0, ylimmax)
@@ -738,141 +757,3 @@ if __name__ == '__main__':
 
     # 图形显示
     plt.show()
-
-"""
-if __name__ == '__main__':
-    rader = RawDataReader("adc.bin")
-    frameConfig = FrameConfig()
-    fig = plt.figure()
-    plt.ion()
-    elev = 0
-    azim = 0
-    while True:
-        frame = rader.getNextFrame(frameConfig)
-
-        rangeResult = rangeFFT(frame,frameConfig)
-        dopplerResult = dopplerFFT(frame,frameConfig)
-        dopplerResultseparate = np.sum(dopplerResult, axis=(0,1))
-       
-        dopplerResultInDB = 20*np.log10(np.absolute(dopplerResultseparate))
-
-        # dopplerResultInDB = 10*np.log2(np.absolute(dopplerResult))
-        cfarRangeResult = np.apply_along_axis(func1d=ca_,
-                                                axis=1,
-                                                arr=dopplerResultInDB,
-                                                l_bound=25,
-                                                guard_len=4,
-                                                noise_len=8)
-        # print(cfarRangeResult.shape)
-        thresholdRange, noiseFloorRange = cfarRangeResult[...,0,:],cfarRangeResult[...,1,:]
-        rangeCFAR = np.zeros(thresholdRange.shape, bool)
-        rangeCFAR[dopplerResultInDB>thresholdRange] = True
-        # input()
-        cfarDopplerResult = np.apply_along_axis(func1d=ca_,
-                                                axis=0,
-                                                arr=dopplerResultInDB,
-                                                l_bound=25,
-                                                guard_len=4,
-                                                noise_len=8)
-        # print(cfarDopplerResult.shape)
-        thresholdDoppler, noiseFloorDoppler = cfarDopplerResult[...,0,:,:],cfarDopplerResult[...,1,:,:]
-        
-        dopplerCFAR = np.zeros(thresholdDoppler.shape, bool)
-        dopplerCFAR[dopplerResultInDB>thresholdDoppler] = True
-
-        cfarResult = rangeCFAR|dopplerCFAR
-
-        AOAInput = dopplerResult[:,:,cfarResult==True]
-        AOAInput = AOAInput.reshape(12,-1)
-        x_vec, y_vec, z_vec = naive_xyz(AOAInput)
-        det_peaks_indices = np.argwhere(cfarResult == True)
-        R = det_peaks_indices[:,1]
-        S = det_peaks_indices[:,0]
-        print(R.shape)
-        # print(S.shape)
-        # print(R)
-        # print(S)
-        x,y,z = x_vec*R, y_vec*R, z_vec*R
-        loc=np.concatenate((x,y,z))
-        loc=np.reshape(loc,(3,-1))
-        loc=np.transpose(loc)
-        loc=loc[y_vec!=0]
-        
-"""
-"""
-        print(loc)
-        print("AOA",AOAInput.shape)
-        print("rangeCFAR",rangeCFAR)
-        print("thresholdDoppler",thresholdDoppler.shape)
-        print("noiseFloorDoppler",noiseFloorDoppler.shape)
-        print (rangeCFAR)
-        print (dopplerResultInDB)
-        print (dopplerResult)
-        pm(rangeResult[0][0])
-        pm(dopplerResult[0][0])
-        pm(dopplerResultseparate)
-        pm(dopplerCFAR)
-        pm(rangeCFAR)
-        pm(cfarResult)
-"""
-
-"""
-        import numpy as np
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D
-
-       
-
-        ax = plt.subplot(111, projection='3d')  # 创建一个三维的绘图工程
-        #  将数据点分成三部分画，在颜色上有区分度
-        
-        ax.scatter(x,y,z, c='g')
-
-        ax.set_zlabel('Z')  # 坐标轴
-        ax.set_ylabel('Y')
-        ax.set_xlabel('X')
-        plt.show()
-"""
-
-"""
-        # 循环
-
-        fig.clf()
-
-        # 设定标题等
-        fig.suptitle("3d")
-
-        # 生成测试数据
-        
-        color = S
-        scale = 10
-
-        # 生成画布
-        ax = fig.add_subplot(111, projection="3d")
-        ax.view_init(elev, azim)
-
-        # 画三维散点图
-        ax.scatter(x, y, z, s=scale, c=color, marker=".")
-
-        # 设置坐标轴图标
-        ax.set_xlabel("X Label")
-        ax.set_ylabel("Y Label")
-        ax.set_zlabel("Z Label")
-
-        # 设置坐标轴范围
-        ax.set_xlim(-200, 200)
-        ax.set_ylim(0, 150)
-        ax.set_zlim(-200, 200)
-
-        # 暂停
-        plt.pause(0.1)
-        azim=ax.azim
-        elev=ax.elev
-    # 关闭交互模式
-    plt.ioff()
-
-    # 图形显示
-    plt.show()
-""" 
-
-
