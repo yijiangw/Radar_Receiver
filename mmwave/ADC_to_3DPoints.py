@@ -14,7 +14,6 @@ from mmwave.util import pm
 from scipy.ndimage import convolve1d
 
 import mmwave.configuration as cfg
-
 # folder=sys.argv[1]
 
 # read 8 byte bin data and turn it to 4 short
@@ -57,6 +56,7 @@ class PointCloudProcessCFG:
         self.enableCouplingSignatureRemoval = True
         self.enableStaticClutterRemoval = True
         self.enableDopplerCompensation = True
+        self.CFARresultFilterTop = True
         self.outputVelocity = True
         self.outputSNR = True
         self.outputRange = True
@@ -81,6 +81,11 @@ class PointCloudProcessCFG:
         if self.enableDopplerCompensation:
             self.dopplerCompensationTable = dopplerCompensationTable(self.frameConfig.numDopplerBins,self.frameConfig.numTxAntennas)
         self.sumCouplingSignatureArray = np.zeros((self.frameConfig.numTxAntennas,self.frameConfig.numRxAntennas,self.couplingSignatureBinFrontIdx+self.couplingSignatureBinRearIdx),dtype = np.complex)
+        
+        self.rangeCFARTopNum = 300
+        self.dopplerCFARTopNum = 150
+        self.rangeCFARTopScale = 1-self.rangeCFARTopNum/self.frameConfig.numDopplerBins/self.frameConfig.numRangeBins
+        self.dopplerCFARTopScale = 1-self.dopplerCFARTopNum/self.frameConfig.numDopplerBins/self.frameConfig.numRangeBins
 
     def calculateCouplingSignatureArray(self,rawBinPath):
         reader = RawDataReader(rawBinPath)
@@ -135,7 +140,7 @@ def frameReshape(frame,frameConfig):
 def rangeFFT(reshapedFrame,frameConfig):    
     """ 1D FFT for range
     """
-    windowedBins1D = reshapedFrame*np.hamming(frameConfig.numADCSamples)
+    windowedBins1D = reshapedFrame*np.blackman(frameConfig.numADCSamples)
     rangeFFTResult=np.fft.fft(windowedBins1D)
     return rangeFFTResult
 
@@ -169,14 +174,14 @@ def clutter_removal(input_val, axis=0):
 def rangeAndDopplerFFT(reshapedFrame,frameConfig):
     """ perform Range and Doppler FFT together
     """
-    windowedBins2D = reshapedFrame*np.reshape(np.hamming(frameConfig.numLoopsPerFrame),(-1,1))*np.hamming(frameConfig.numADCSamples)
+    windowedBins2D = reshapedFrame*np.reshape(np.blackman(frameConfig.numLoopsPerFrame),(-1,1))*np.blackman(frameConfig.numADCSamples)
     dopplerFFTResult=np.fft.fft2(windowedBins2D)
     return dopplerFFTResult
 
 def dopplerFFT(rangeResult,frameConfig):    
     """ input result from rangeFFT and do 2D FFT for velocity
     """
-    windowedBins2D = rangeResult*np.reshape(np.hamming(frameConfig.numLoopsPerFrame),(1,1,-1,1))
+    windowedBins2D = rangeResult*np.reshape(np.blackman(frameConfig.numLoopsPerFrame),(1,1,-1,1))
     dopplerFFTResult=np.fft.fft(windowedBins2D,axis=2)
     dopplerFFTResult=np.fft.fftshift(dopplerFFTResult,axes=2)
     return dopplerFFTResult
@@ -366,11 +371,6 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
                                             l_bound=25,
                                             guard_len=4,
                                             noise_len=8)
-    # print(cfarRangeResult.shape)
-    thresholdRange, noiseFloorRange = cfarRangeResult[...,0,:],cfarRangeResult[...,1,:]
-    rangeCFAR = np.zeros(thresholdRange.shape, bool)
-    rangeCFAR[dopplerResultInDB>thresholdRange] = True
-    # input()
     cfarDopplerResult = np.apply_along_axis(func1d=ca_,
                                             axis=0,
                                             arr=dopplerResultInDB,
@@ -378,13 +378,32 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
                                             guard_len=4,
                                             noise_len=8)
     # print(cfarDopplerResult.shape)
+    # print(cfarRangeResult.shape)
+    thresholdRange, noiseFloorRange = cfarRangeResult[...,0,:],cfarRangeResult[...,1,:]
     thresholdDoppler, noiseFloorDoppler = cfarDopplerResult[...,0,:,:],cfarDopplerResult[...,1,:,:]
-    
-    dopplerCFAR = np.zeros(thresholdDoppler.shape, bool)
-    dopplerCFAR[dopplerResultInDB>thresholdDoppler] = True
+    rangeCFAR = np.zeros(dopplerResultInDB.shape, bool)
+    dopplerCFAR = np.zeros(dopplerResultInDB.shape, bool)
+    rangeCFARElite = np.zeros(dopplerResultInDB.shape, bool)
+    dopplerCFARlite= np.zeros(dopplerResultInDB.shape, bool)
+    SNRRange = dopplerResultInDB - noiseFloorRange
+    SNRDoppler = dopplerResultInDB - noiseFloorDoppler
 
-    cfarResult = rangeCFAR|dopplerCFAR
-    
+    if (pointCloudProcessCFG.CFARresultFilterTop):
+
+        thresholdRange = np.quantile(SNRRange,pointCloudProcessCFG.rangeCFARTopScale,interpolation='lower')
+        thresholdDoppler = np.quantile(SNRDoppler,pointCloudProcessCFG.dopplerCFARTopScale,interpolation='lower')
+        thresholdRangeElite = np.quantile(SNRRange,1-0.4*(1-pointCloudProcessCFG.rangeCFARTopScale),interpolation='lower')
+        thresholdDopplerElite = np.quantile(SNRRange,1-0.2*(1-pointCloudProcessCFG.dopplerCFARTopScale),interpolation='lower')
+        rangeCFARElite[SNRRange>thresholdRangeElite] =True
+        dopplerCFARlite[SNRDoppler>thresholdDopplerElite] =True
+        rangeCFAR[SNRRange>thresholdRange] = True    
+        dopplerCFAR[SNRDoppler>thresholdDoppler] = True
+    else:
+        rangeCFAR[dopplerResultInDB>thresholdRange] = True    
+        dopplerCFAR[dopplerResultInDB>thresholdDoppler] = True
+
+    cfarResult = (rangeCFAR&dopplerCFAR)|rangeCFARElite|dopplerCFARlite
+
     det_peaks_indices = np.argwhere(cfarResult == True)
     # record range and velocity of detected points
     R = det_peaks_indices[:,1].astype(np.float64)
@@ -392,11 +411,10 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
     if pointCloudProcessCFG.outputInMeter:
         R *= cfg.RANGE_RESOLUTION
         V *= cfg.DOPPLER_RESOLUTION
-    print(R.shape)
+    print("cfarshape",R.shape)
     # record rangeCFAR SNR of detected points  
-    SNR = dopplerResultInDB - noiseFloorRange
-    SNR = SNR[cfarResult==True]
-    print("SNR shape",SNR.shape)
+    SNR = SNRRange[cfarResult==True]
+    # print("SNR shape",SNR.shape)
 
     AOAInput = dopplerResult[:,:,cfarResult==True]
     AOAInput = AOAInput.reshape(12,-1)
@@ -406,7 +424,12 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
     print("AOAInput:",AOAInput.shape,len(AOAInput))
     if AOAInput.shape[1]==0:
         print("no cfar det point")
+        pm(dopplerResult[0,0,...])
+        pm(dopplerResultSumAllAntenna)
+        pm(dopplerResultInDB)
+        pm(noiseFloorDoppler)
         return np.array([]).reshape(6,0)
+   
     x_vec, y_vec, z_vec = naive_xyz(AOAInput)   
     
     # print(S.shape)
@@ -414,11 +437,11 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
     # print(S)
     x,y,z = x_vec*R, y_vec*R, z_vec*R
     pointCloud=np.concatenate((x,y,z,V,SNR,R))
-    print("pointCloud",pointCloud.shape)
+    # print("pointCloud",pointCloud.shape)
     pointCloud = np.reshape(pointCloud,(6,-1))
-    print(pointCloud.shape)
+    # print(pointCloud.shape)
     pointCloud = pointCloud[:,y_vec!=0]      
-    print(pointCloud.shape) 
+    # print(pointCloud.shape) 
     return pointCloud
 
 def compareframe2pointcloud(frame,pointCloudProcessCFG):
@@ -520,17 +543,17 @@ def compareframe2pointcloud(frame,pointCloudProcessCFG):
     if pointCloudProcessCFG.outputInMeter:
         R *= cfg.RANGE_RESOLUTION
         V *= cfg.DOPPLER_RESOLUTION
-    print(R.shape)
+    # print(R.shape)
     # print(S.shape)
     # print(R)
     # print(S)
     x,y,z = x_vec*R, y_vec*R, z_vec*R
     pointCloud=np.concatenate((x,y,z,V,SNR,R))
-    print("pointCloud",pointCloud.shape)
+    # print("pointCloud",pointCloud.shape)
     pointCloud = np.reshape(pointCloud,(6,-1))
-    print(pointCloud.shape)
+    # print(pointCloud.shape)
     pointCloud = pointCloud[:,y_vec!=0]      
-    print(pointCloud.shape) 
+    # print(pointCloud.shape) 
 
     return cfarResult2,cfarResult1,pointCloud
     
@@ -547,7 +570,7 @@ if __name__ == '__main__':
         originalfig = plt.figure("orgin")
 
     frameConfig = pointCloudProcessCFG.frameConfig
-    dataPath = "d:\\hongfei\\1.bin"
+    dataPath = "adc_fb.bin"
     reader = RawDataReader(dataPath)
     pointCloudProcessCFG.calculateCouplingSignatureArray(dataPath)
 
@@ -561,7 +584,7 @@ if __name__ == '__main__':
     while True:
         frame = reader.getNextFrame(frameConfig)
         pointCloud = frame2pointcloud(frame,pointCloudProcessCFG)
-
+        print(pointCloud.shape)
         if compare == True:
             originalpointCloud = frame2pointcloud(frame,originalpointCloudProcessCFG)
             originalcfarResult,newcfarResult,comparepointCloud = compareframe2pointcloud(frame,pointCloudProcessCFG)            
@@ -573,7 +596,7 @@ if __name__ == '__main__':
                 pointCloudSubplot = comparefig.add_subplot(gs[0:3,0:3],projection="3d")
                 pointCloudSubplot.view_init(elev, azim)
                 color = comparepointCloud[pointCloudProcessCFG.velocityDim]
-                scale = 4
+                scale = 2
                 x = comparepointCloud[0]
                 y = comparepointCloud[1]
                 z = comparepointCloud[2]
