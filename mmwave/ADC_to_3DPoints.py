@@ -3,9 +3,8 @@
 import sys
 import struct
 import numpy as np
-import scipy as sp
 import array as arr
-
+import time
 import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -50,13 +49,13 @@ class FrameConfig:
         # calculate size of one frame in short.
         self.frameSize = self.chirpLoopSize * self.numLoopsPerFrame
 
-class PointCloudProcessCFG:    
+class PointCloudProcessCFG:
     def __init__(self):
         self.frameConfig = FrameConfig()
-        self.enableCouplingSignatureRemoval = True
+        self.enableCouplingSignatureRemoval = False
         self.enableStaticClutterRemoval = True
-        self.enableDopplerCompensation = True
-        self.reFFTBeforeAOA = True
+        self.enableDopplerCompensation = False
+        self.reFFTBeforeAOA = False
         self.CFARresultFilterTop = True
         self.outputVelocity = True
         self.outputSNR = True
@@ -420,7 +419,7 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
     if pointCloudProcessCFG.outputInMeter:
         R *= cfg.RANGE_RESOLUTION
         V *= cfg.DOPPLER_RESOLUTION
-    print("cfarshape",R.shape)
+    # print("cfarshape",R.shape)
     # record rangeCFAR SNR of detected points  
     SNR = SNRRange[cfarResult==True]
     # print("SNR shape",SNR.shape)
@@ -434,7 +433,7 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
 
     # print("AOAInput:",AOAInput.shape,len(AOAInput))
     if AOAInput.shape[1]==0:
-        print("no cfar det point")
+        # print("no cfar det point")
         pm(dopplerResult[0,0,...])
         pm(dopplerResultSumAllAntenna)
         pm(dopplerResultInDB)
@@ -452,7 +451,7 @@ def frame2pointcloud(frame,pointCloudProcessCFG):
     # print(pointCloud.shape)
     pointCloud = pointCloud[:,y_vec!=0]      
     # print(pointCloud.shape) 
-    print("pointCloud",pointCloud.shape)
+    # print("pointCloud",pointCloud.shape)
 
     return pointCloud
 
@@ -541,14 +540,14 @@ def compareframe2pointcloud(frame,pointCloudProcessCFG):
 
     AOAInput = dopplerResult[:,:,cfarResult==True]
     AOAInput = AOAInput.reshape(12,-1)
-    print("AOAInput:",AOAInput.shape,len(AOAInput))
+    # print("AOAInput:",AOAInput.shape,len(AOAInput))
     if AOAInput.shape[1]==0:
         return np.array([]).reshape(6,0)
     x_vec, y_vec, z_vec = naive_xyz(AOAInput)
     det_peaks_indices = np.argwhere(cfarResult == True)
     SNR = dopplerResultInDB - noiseFloorRange
     SNR = SNR[cfarResult==True]
-    print("SNR shape",SNR.shape)
+    # print("SNR shape",SNR.shape)
 
     R = det_peaks_indices[:,1].astype(np.float64)
     V = (det_peaks_indices[:,0]-frameConfig.numDopplerBins//2).astype(np.float64)
@@ -582,18 +581,23 @@ if __name__ == '__main__':
         originalfig = plt.figure("orgin")
 
     frameConfig = pointCloudProcessCFG.frameConfig
-    dataPath = "adc_h.bin"
+    dataPath = "C:\\Users\\wyj19\\Desktop\\cupy\\adc_fb.bin"
     reader = RawDataReader(dataPath)
     pointCloudProcessCFG.calculateCouplingSignatureArray(dataPath)
-
-    print3Dfig = True
-
+    time1 = time.time()
+    for i in range(600):
+        frame = reader.getNextFrame(frameConfig)
+        pointCloud = frame2pointcloud(frame,pointCloudProcessCFG)
+    print(pointCloud)
+    print3Dfig = False
+    time2 = time.time()
+    print(time2-time1)
     if print3Dfig == True:
         fig = plt.figure("new")
         plt.ion()
         elev = 0
         azim = 0
-    while True:
+    while False:
         frame = reader.getNextFrame(frameConfig)
         pointCloud = frame2pointcloud(frame,pointCloudProcessCFG)
         if compare == True:
